@@ -54,71 +54,76 @@ public class Server
     private void ThreadMethod()
     {
         NetData data;
-        NetConnection connection;
-
+        
         while (true)
         {
             data = AwaitMessage();
+            HandleData(data);
+        }
+    }
 
-            if (data.MsgType == NetData.MessageType.Invalid)
-                Debug.LogError(data.ErrorMsg);
+    private void HandleData(NetData data)
+    {
+        NetConnection connection;
 
-            if (data.MsgType == NetData.MessageType.TimeSync && connections.TryGetValue(recvEndPoint, out connection))
+        if (data.MsgType == NetData.MessageType.Invalid)
+            Debug.LogError(data.ErrorMsg);
+
+        if (data.MsgType == NetData.MessageType.TimeSync && connections.TryGetValue(recvEndPoint, out connection))
+        {
+            NetData response = new NetData(data.SyncId);
+            SendNetData(response);
+            connection.CurrentState = NetConnection.State.TimeSync;
+        }
+        else
+        {
+            if (data.MsgType == NetData.MessageType.Connect)
             {
-                NetData response = new NetData(data.SyncId);
-                SendNetData(response);
-                connection.CurrentState = NetConnection.State.TimeSync;
+                HandleConnectionMsg(data);
             }
-            else
+            else if (connections.TryGetValue(recvEndPoint, out connection))
             {
-                if (data.MsgType == NetData.MessageType.Connect)
+                if (data.MsgType == NetData.MessageType.Data)
                 {
-                    HandleConnectionMsg(data);
-                }
-                else if (connections.TryGetValue(recvEndPoint, out connection))
-                {
-                    if (data.MsgType == NetData.MessageType.Data)
+                    if (data.Tick != connection.LastMsg.Tick)
                     {
-                        if (data.Tick != connection.LastMsg.Tick)
-                        {
-                            int index = connection.AckData(data.AckId);
-                            if (index >= 0)
-                                Debug.SetPinMessage($"Rtt: {(NetData.GetTimeStamp() - connection.SentData[index].TimeStamp).ToString("D6")} - Average Rtt: {connection.GetAverageRtt().ToString("0000.00")}");
-                        }
+                        int index = connection.AckData(data.AckId);
+                        if (index >= 0)
+                            Debug.SetPinMessage($"Rtt: {(NetData.GetTimeStamp() - connection.SentData[index].TimeStamp).ToString("D6")} - Average Rtt: {connection.GetAverageRtt().ToString("0000.00")}");
+                    }
 
-                        if (data.Commands != null && data.Commands.Length > 0)
-                        {
-                            if (!connection.hasMoved)
-                                connection.hasMoved = true;
+                    if (data.Commands != null && data.Commands.Length > 0)
+                    {
+                        if (!connection.hasMoved)
+                            connection.hasMoved = true;
 
-                            for (int i = 0; i < data.Commands.Length; i++)
+                        for (int i = 0; i < data.Commands.Length; i++)
+                        {
+                            if (connection.LastCommandId < data.Commands[i].Id || connection.LastCommandId > ushort.MaxValue / 2 && data.Commands[i].Id > 0)
                             {
-                                if (connection.LastCommandId < data.Commands[i].Id || connection.LastCommandId > ushort.MaxValue / 2 && data.Commands[i].Id > 0)
-                                {
-                                    data.Commands[i].Perform(CurrentState, connection.Id);
-                                    connection.LastCommandId = data.Commands[i].Id;
-                                }
+                                data.Commands[i].Perform(CurrentState, connection.Id);
+                                connection.LastCommandId = data.Commands[i].Id;
                             }
                         }
-                        //if (index >= 0)
-                        //{
-                        //}
-                        //receivedData.Enqueue(data);
                     }
-                    else if (data.MsgType == NetData.MessageType.FinishedLoading)
-                    {
-                        connection.CurrentState = NetConnection.State.Ready;
-                    }
+                    //if (index >= 0)
+                    //{
+                    //}
+                    //receivedData.Enqueue(data);
+                }
+                else if (data.MsgType == NetData.MessageType.FinishedLoading)
+                {
+                    connection.CurrentState = NetConnection.State.Ready;
+                }
 
-                    if (data.MsgType == NetData.MessageType.Invalid)
-                    {
-                        Disconnect(recvEndPoint, false);
-                    }
-                    else
-                    {
-                        connection.LastMsg = data;
-                        connection.LastMsgTime = NetData.watch.Elapsed;
-                    }
+                if (data.MsgType == NetData.MessageType.Invalid)
+                {
+                    Disconnect(recvEndPoint, false);
+                }
+                else
+                {
+                    connection.LastMsg = data;
+                    connection.LastMsgTime = NetData.watch.Elapsed;
                 }
             }
         }
